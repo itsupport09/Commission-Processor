@@ -93,3 +93,59 @@ select.sel-2{border-color:#b45309;background:#2a1f08;color:#fbbf24;font-weight:7
 td.num.hit{color:var(--warn);font-weight:700}
 th .num{white-space:nowrap}
 .stat .v.warn{color:var(--warn)}
+
+/* ================================================================
+   Shell — mode switcher wrapping V1 and V2. Appended only; nothing
+   above this line changes, so V1 renders exactly as it always has.
+   ================================================================ */
+.shell{display:flex;align-items:flex-start;min-height:100vh}
+.shell-nav{position:sticky;top:0;flex:0 0 248px;width:248px;height:100vh;overflow-y:auto;
+  background:#0a1322;border-right:1px solid var(--line);padding:20px 14px;display:flex;
+  flex-direction:column;gap:18px}
+.shell-brand{display:flex;align-items:center;gap:10px;padding:0 4px}
+.shell-brand-text{display:flex;flex-direction:column;line-height:1.25}
+.shell-brand-text strong{font-size:14px;font-weight:800}
+.shell-brand-text span{font-size:11px;color:var(--muted)}
+.shell-modes{display:flex;flex-direction:column;gap:6px}
+.shell-mode{display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+  width:100%;padding:11px 12px;border-radius:10px;background:transparent;border:1px solid transparent;
+  color:var(--soft);cursor:pointer;font-family:inherit}
+.shell-mode:hover{background:var(--chip);border-color:var(--line)}
+.shell-mode.active{background:#0e1d34;border-color:var(--accent);color:var(--text)}
+.shell-mode-label{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700}
+.shell-mode-hint{font-size:11px;color:var(--muted);font-weight:500;line-height:1.4}
+.shell-main{flex:1;min-width:0;max-width:100%}
+.shell-main>[hidden]{display:none}
+
+/* V2 identity — must be unmistakable when both modes are open */
+.badge-v2{display:inline-block;vertical-align:middle;margin-left:8px;padding:3px 8px;border-radius:6px;
+  background:#3a2e08;color:#fcd34d;border:1px solid #7c5e0a;font-size:10px;font-weight:800;
+  letter-spacing:.6px;text-transform:uppercase}
+.badge-v2.sm{margin-left:0;padding:1px 5px;font-size:9px;letter-spacing:.4px}
+.logo.logo-v2{background:linear-gradient(135deg,var(--warn),#b45309)}
+
+/* V2 Preview 2 — payment log cells */
+.logblock{margin:0;padding:6px 8px;max-height:96px;overflow:auto;background:#0c1626;
+  border:1px solid var(--line);border-radius:7px;font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  font-size:11px;line-height:1.5;color:var(--soft);white-space:pre-wrap;word-break:break-word}
+.logline{display:inline-block;padding:4px 8px;border-radius:7px;background:#0c3320;color:#6ee7a8;
+  border:1px solid #17512f;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;
+  white-space:nowrap}
+.rollup-diff{white-space:nowrap}
+.rollup-diff .was{color:var(--muted);text-decoration:line-through}
+.rollup-diff .arrow{color:var(--muted)}
+
+/* Sidebar collapses to a top tab bar on narrow screens */
+@media(max-width:900px){
+  /* align-items:flex-start keeps the sidebar from stretching in the row layout,
+     but in the stacked layout it would shrink main to its content width and
+     scroll the whole page sideways — stretch it back. */
+  .shell{flex-direction:column;align-items:stretch}
+  .shell-nav{position:static;flex:none;width:100%;height:auto;flex-direction:row;align-items:center;
+    gap:12px;padding:10px 12px;border-right:none;border-bottom:1px solid var(--line);overflow-x:auto}
+  .shell-brand{flex:none}
+  .shell-brand-text{display:none}
+  .shell-modes{flex-direction:row;gap:6px}
+  .shell-mode{width:auto;padding:8px 12px;white-space:nowrap}
+  .shell-mode-hint{display:none}
+}

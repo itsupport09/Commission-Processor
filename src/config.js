@@ -35,3 +35,33 @@ export const PD_DOMAIN = 'https://unifynetworks.pipedrive.com';
 // recalculates Total / Variance £ / Variance % formula fields.
 export const RECALC_DELAY = 2500;
 export const CALL_DELAY = 150;          // throttle between API calls
+
+/* ------------------------------------------------------------------ *
+ * V2 — rollup total + payment log. Additive only; nothing above here
+ * changes, so the live Payment 1 / Payment 2 flow is untouched.
+ * All four IDs verified against GET /api/v1/dealFields?limit=500.
+ * ------------------------------------------------------------------ */
+export const F2 = {
+  // We write these two.
+  rollupTotal:   '1fb0c5b33dd91ef52a6cf0edec10e8e939123d82', // monetary
+  paymentLog:    '9e543b85f840ac6df77b48cecf6fc1c4b44e717d', // large text
+  // Read-only formulas, derived from rollupTotal. Never written.
+  //   New Payment Variance % = rollup / (deal value * (BT rate / 100)) * 100
+  //   New Payment Variance £ = rollup - (deal value * (BT rate / 100))
+  newVariancePct: '1a1989704f3bcd7791b92455069eb4ca4c94e4db', // double  (formula)
+  newVarianceGbp: 'a13281d3b572f4afc2c65596ceeb45ee35309900', // monetary(formula)
+  // Shared with V1, unchanged.
+  paymentStage:  'cbeb7c907113828791b341495888fca31b0a69d5',
+  btOrderRef:    '18e1106b343f6c62c859ee1b36dffa595e81c155',
+  connectionDate:'df3e245bc58532c0fdeca90cd7aa7d36b98804d8',
+};
+
+/**
+ * Measured on live deals (24664, value £3106.80 @ 5%): after PATCHing Rollup,
+ * the two variance formulas landed between 2775ms and 5080ms across six writes.
+ * V1's 2500ms would have been too short every single time, so V2 waits longer
+ * and then re-polls only the rows still reading null.
+ */
+export const RECALC_DELAY_V2 = 6000;
+export const RECALC_POLL_ATTEMPTS = 4;
+export const RECALC_POLL_INTERVAL = 2000;

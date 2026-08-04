@@ -1,8 +1,8 @@
 import React, { useState, useRef, useMemo } from 'react';
-import { FIELDS, autoMap, readFile, gbp } from './lib/parse';
-import { buildRows, resolveStage } from './lib/calc';
-import { searchDeals, getDeal, patchDeal, sleep } from './lib/pipedrive';
-import { F, STAGE_LIST, PIPELINES, PD_DOMAIN, CURRENCY, RECALC_DELAY } from './config';
+import { FIELDS, autoMap, readFile, gbp } from '../lib/parse';
+import { buildRows, resolveStage } from '../lib/calc';
+import { searchDeals, getDeal, patchDeal, sleep } from '../lib/pipedrive';
+import { F, STAGE_LIST, PIPELINES, PD_DOMAIN, CURRENCY, RECALC_DELAY } from '../config';
 
 const STEPS = [
   ['upload',   '1. Upload'],
@@ -16,7 +16,7 @@ const money = v => (v && typeof v === 'object' ? Number(v.value) : Number(v)) ||
 const optLabel = v => (v && typeof v === 'object' ? v.label : v) ?? '';
 const dateOf = v => (typeof v === 'string' ? v.slice(0, 10) : '');
 
-export default function App() {
+export default function AppV1() {
   const [stage, setStage] = useState('upload');
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState([]);
