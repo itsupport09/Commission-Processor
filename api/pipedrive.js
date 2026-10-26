@@ -13,7 +13,27 @@ export default async function handler(req, res) {
   const qs = new URLSearchParams(params).toString();
   const url = `https://api.pipedrive.com${path}${qs ? `?${qs}` : ''}`;
 
+  const writing = !['GET', 'HEAD'].includes(req.method);
+  const dealWrite = writing && /^\/api\/v[12]\/deals\/(\d+)$/.exec(path);
+
   try {
+    // A deal is only ever updated once it is won. Checked here as well as in the
+    // UI, so no caller can write to an open or lost deal.
+    if (dealWrite) {
+      const dealId = dealWrite[1];
+      const probe = await fetch(`https://api.pipedrive.com/api/v2/deals/${dealId}`, {
+        headers: { 'x-api-token': token },
+      });
+      const probeJson = await probe.json().catch(() => ({}));
+      const dealStatus = probeJson?.data?.status;
+      if (dealStatus !== 'won') {
+        return res.status(409).json({
+          success: false,
+          error: `Deal ${dealId} is ${dealStatus || 'unreadable'} — Pipedrive is only updated on won deals`,
+        });
+      }
+    }
+
     const r = await fetch(url, {
       method: req.method,
       headers: { 'Content-Type': 'application/json', 'x-api-token': token },

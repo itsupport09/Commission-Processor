@@ -3,7 +3,7 @@ import { FIELDS, autoMap, readFile, gbp } from '../lib/parse';
 import { buildRows } from '../lib/calc';
 import { resolveStage } from './calc';
 import { parseLog, formatLogLine, appendLogLine, hasLogLine, logTotal } from './log';
-import { searchDeals, getDeal, patchDeal, sleep } from '../lib/pipedrive';
+import { searchDeals, getDeal, patchDeal, sleep, isWon } from '../lib/pipedrive';
 import {
   F2, STAGE_LIST, PIPELINES, PD_DOMAIN, CURRENCY,
   RECALC_DELAY_V2, RECALC_POLL_ATTEMPTS, RECALC_POLL_INTERVAL,
@@ -21,6 +21,9 @@ const money = v => (v && typeof v === 'object' ? Number(v.value) : Number(v)) ||
 const isNullMoney = v => v == null || (typeof v === 'object' && v.value == null);
 const optLabel = v => (v && typeof v === 'object' ? v.label : v) ?? '';
 const numOrNull = v => (v == null || v === '' ? null : Number(v));
+
+/** Nothing is written to Pipedrive unless the matched deal is won. */
+const canWrite = r => !!r.dealId && r.dealStatus === 'won';
 
 export default function AppV2() {
   const [stage, setStage] = useState('upload');
@@ -83,11 +86,34 @@ export default function AppV2() {
           const d = await getDeal(it.id);
           if (d && allowed.includes(d.pipeline_id)) deals.push(d);
         }
+        // Won deals only. Anything else is shown for reference and left untouched.
+        const wonDeals = deals.filter(isWon);
         if (deals.length === 0) {
           result.push({ ...row, status: 'nomatch', error: `No deal in pipeline ${allowed.join('/')}` });
-        } else {
+        } else if (wonDeals.length === 0) {
           const d = deals[0];
-          const multi = deals.length > 1;
+          const currentLog = cf(d, F2.paymentLog) || '';
+          const parsed = parseLog(currentLog);
+          const storedRollup = cf(d, F2.rollupTotal);
+          result.push({
+            ...row,
+            dealId: d.id, dealTitle: d.title, pipelineId: d.pipeline_id, dealStatus: d.status,
+            currentLog,
+            logEntries: parsed.entries,
+            logBad: parsed.bad,
+            parsedTotal: parsed.total,
+            storedRollup: isNullMoney(storedRollup) ? null : money(storedRollup),
+            applied: false,
+            currentStage: optLabel(cf(d, F2.paymentStage)),
+            variancePct: numOrNull(cf(d, F2.newVariancePct)),
+            varianceGbp: isNullMoney(cf(d, F2.newVarianceGbp)) ? null : money(cf(d, F2.newVarianceGbp)),
+            approved: false,
+            status: 'notwon',
+            error: `Deal is ${d.status || 'not won'} — nothing is written until it is won`,
+          });
+        } else {
+          const d = wonDeals[0];
+          const multi = wonDeals.length > 1;
           const currentLog = cf(d, F2.paymentLog) || '';
           const parsed = parseLog(currentLog);
           const storedRollup = cf(d, F2.rollupTotal);
@@ -98,7 +124,7 @@ export default function AppV2() {
 
           result.push({
             ...row,
-            dealId: d.id, dealTitle: d.title, pipelineId: d.pipeline_id,
+            dealId: d.id, dealTitle: d.title, pipelineId: d.pipeline_id, dealStatus: d.status,
             currentLog,
             logEntries: parsed.entries,
             logBad: parsed.bad,
@@ -112,7 +138,7 @@ export default function AppV2() {
             varianceGbp: isNullMoney(cf(d, F2.newVarianceGbp)) ? null : money(cf(d, F2.newVarianceGbp)),
             approved: !applied && !multi,
             status: applied ? 'applied' : multi ? 'ambiguous' : 'matched',
-            error: multi ? `${deals.length} deals matched — verify` : '',
+            error: multi ? `${wonDeals.length} won deals matched — verify` : '',
           });
         }
       } catch (e) {
@@ -152,7 +178,7 @@ export default function AppV2() {
    * One PATCH per deal carrying both fields. Rollup is recomputed by summing
    * the whole appended log, so a hand-edited line self-corrects on this run. */
   const pushPayments = async () => {
-    const targets = rows.filter(r => r.approved && r.dealId);
+    const targets = rows.filter(r => r.approved && canWrite(r));
     if (!targets.length) { setErr('Tick at least one row to approve.'); return; }
     setErr(''); setBusy('Appending payment lines and writing Rollup…');
     setProgress({ done: 0, total: targets.length });
@@ -169,7 +195,7 @@ export default function AppV2() {
           [F2.paymentLog]: nextLog,
           // Must never sit null — the variance formulas need a number to fire.
           [F2.rollupTotal]: { value: Number.isFinite(nextRollup) ? nextRollup : 0, currency: CURRENCY },
-        });
+        }, r.dealStatus);
 
         editRow(r.id, {
           status: 'written', error: '', wrote: true,
@@ -263,8 +289,8 @@ export default function AppV2() {
    * Read-only: V2 never seeds, so a deal with an empty Rollup will show no
    * variance and simply block approval on that row. */
   const reviewStagesOnly = async () => {
-    const targets = rows.filter(r => r.dealId);
-    if (!targets.length) { setErr('No matched deals to review.'); return; }
+    const targets = rows.filter(canWrite);
+    if (!targets.length) { setErr('No won deals to review.'); return; }
     setErr('');
     await refreshAndResolve(targets);
     setBusy('');
@@ -273,13 +299,13 @@ export default function AppV2() {
 
   /* ---------------- step 4: push Payment Stage ---------------- */
   const pushStages = async () => {
-    const targets = rows.filter(r => r.stageApproved && r.dealId && r.newStage);
+    const targets = rows.filter(r => r.stageApproved && canWrite(r) && r.newStage);
     if (!targets.length) { setErr('Tick at least one row to approve.'); return; }
     setErr(''); setBusy('Updating Payment Stage…');
     setProgress({ done: 0, total: targets.length });
     for (const r of targets) {
       try {
-        await patchDeal(r.dealId, { [F2.paymentStage]: r.newStage });
+        await patchDeal(r.dealId, { [F2.paymentStage]: r.newStage }, r.dealStatus);
         editRow(r.id, { status: 'done', error: '' });
       } catch (e) {
         editRow(r.id, { status: 'error', error: e.message });
@@ -290,7 +316,7 @@ export default function AppV2() {
   };
 
   const allTick = (key, val) =>
-    setRows(rs => rs.map(r => (r.dealId ? { ...r, [key]: val } : r)));
+    setRows(rs => rs.map(r => (canWrite(r) ? { ...r, [key]: val } : r)));
 
   /* ---------------- render ---------------- */
   const stepIdx = STEPS.findIndex(s => s[0] === stage);
@@ -396,9 +422,10 @@ export default function AppV2() {
           <p className="sub">
             One line is <b>appended</b> to Invoice Amounts &amp; Payment Dates; existing lines are never
             rewritten or reordered. <b>Rollup Total Commission Received</b> is then recomputed by summing
-            the whole log, so a hand-edited line in Pipedrive self-corrects on this run. Rows whose exact
-            line is already logged are flagged <b>Already applied</b> and left unticked. Nothing has been
-            written yet.
+            the whole log, so a hand-edited line in Pipedrive self-corrects on this run. Only <b>won</b>
+            deals are ever written to — a matched deal that is still open or lost is flagged <b>Not won</b>
+            and left untouched. Rows whose exact line is already logged are flagged <b>Already applied</b>
+            and left unticked. Nothing has been written yet.
           </p>
           <SummaryV2 rows={rows} />
           <div className="scroll">
@@ -416,13 +443,13 @@ export default function AppV2() {
               </tr></thead>
               <tbody>{rows.map(r => {
                 const line = r.invoiceDate ? formatLogLine(r.invoiceDate, r.amount) : '';
-                const nextLog = r.dealId ? appendLogLine(r.currentLog || '', line) : '';
-                const nextRollup = r.dealId && line ? logTotal(nextLog) : null;
+                const nextLog = canWrite(r) ? appendLogLine(r.currentLog || '', line) : '';
+                const nextRollup = canWrite(r) && line ? logTotal(nextLog) : null;
                 const drift = r.dealId && r.storedRollup != null &&
                   Math.abs(r.storedRollup - r.parsedTotal) > 0.005;
                 return (
-                <tr key={r.id} className={r.dealId ? '' : 'dim'}>
-                  <td><input type="checkbox" disabled={!r.dealId} checked={!!r.approved}
+                <tr key={r.id} className={canWrite(r) ? '' : 'dim'}>
+                  <td><input type="checkbox" disabled={!canWrite(r)} checked={!!r.approved}
                     onChange={e => editRow(r.id, { approved: e.target.checked })} /></td>
                   <td><span className={'tag ' + (r.product === 'Cloud Voice' ? 't-cv' : 't-bb')}>{r.product}</span></td>
                   <td className="mono">{r.matchKey}<div className="small">{r.matchField}</div></td>
@@ -457,7 +484,7 @@ export default function AppV2() {
                   <td><input type="date" value={r.invoiceDate || ''}
                     onChange={e => editLogRow(r, { invoiceDate: e.target.value })} /></td>
                   <td>
-                    {!r.dealId ? <span className="small">—</span>
+                    {!canWrite(r) ? <span className="small">—</span>
                       : line ? <code className="logline">+ {line}</code>
                       : <span className="small neg">No invoice date — cannot build a line</span>}
                   </td>
@@ -510,7 +537,7 @@ export default function AppV2() {
               </tr></thead>
               <tbody>{rows.filter(r => r.reviewed).map(r => (
                 <tr key={r.id}>
-                  <td><input type="checkbox" disabled={!r.newStage} checked={!!r.stageApproved}
+                  <td><input type="checkbox" disabled={!r.newStage || !canWrite(r)} checked={!!r.stageApproved}
                     onChange={e => editRow(r.id, { stageApproved: e.target.checked })} /></td>
                   <td><span className={'tag ' + (r.product === 'Cloud Voice' ? 't-cv' : 't-bb')}>{r.product}</span></td>
                   <td>
@@ -562,10 +589,11 @@ function SummaryV2({ rows }) {
     a.total++;
     if (r.product === 'Cloud Voice') a.cv++; else a.bb++;
     if (!r.dealId) a.nomatch++;
+    if (r.dealId && r.dealStatus !== 'won') a.notwon++;
     if (r.applied) a.applied++;
     a.sum += r.amount;
     return a;
-  }, { total: 0, cv: 0, bb: 0, nomatch: 0, applied: 0, sum: 0 });
+  }, { total: 0, cv: 0, bb: 0, nomatch: 0, notwon: 0, applied: 0, sum: 0 });
   return (
     <div className="stats">
       <div className="stat"><div className="v">{t.total}</div><div className="k">Deals to update</div></div>
@@ -573,6 +601,7 @@ function SummaryV2({ rows }) {
       <div className="stat"><div className="v">{t.bb}</div><div className="k">Broadband / CVE</div></div>
       <div className="stat"><div className={'v' + (t.applied ? ' warn' : '')}>{t.applied}</div><div className="k">Already applied</div></div>
       <div className="stat"><div className={'v' + (t.nomatch ? ' neg' : '')}>{t.nomatch}</div><div className="k">Not matched</div></div>
+      <div className="stat"><div className={'v' + (t.notwon ? ' neg' : '')}>{t.notwon}</div><div className="k">Not won — skipped</div></div>
       <div className="stat"><div className="v">{gbp(t.sum)}</div><div className="k">Net commission</div></div>
     </div>
   );
@@ -582,6 +611,7 @@ function StatusTag({ r }) {
   const m = {
     pending: ['t-part', 'Pending'], matched: ['t-full', 'Matched'],
     ambiguous: ['t-part', 'Multiple'], nomatch: ['t-cancel', 'No deal'],
+    notwon: ['t-cancel', 'Not won'],
     applied: ['t-part', 'Already applied'],
     written: ['t-full', 'Written'], ready: ['t-full', 'Ready'],
     calculating: ['t-part', 'Calculating'],

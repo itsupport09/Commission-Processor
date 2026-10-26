@@ -32,7 +32,18 @@ export function getDeal(id) {
   return call(`/api/v2/deals/${id}`, { params: { include_option_labels: 'true' } });
 }
 
-export function patchDeal(id, custom_fields) {
+/** Pipedrive is only ever written on won deals. */
+export const isWon = deal => deal?.status === 'won';
+
+/**
+ * Write custom fields on a deal. The deal's own status has to be passed in and
+ * has to be 'won' — an open, lost or deleted deal is never written to, so a
+ * missed check upstream throws here instead of changing the CRM.
+ */
+export async function patchDeal(id, custom_fields, dealStatus) {
+  if (!isWon({ status: dealStatus })) {
+    throw new Error(`Deal ${id} is ${dealStatus || 'not won'} — Pipedrive is only updated on won deals`);
+  }
   return call(`/api/v2/deals/${id}`, { method: 'PATCH', body: { custom_fields } });
 }
 
