@@ -36,6 +36,7 @@ export default function AppV2() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [finished, setFinished] = useState(false);
   const [over, setOver] = useState(false);
   const inputRef = useRef();
 
@@ -65,6 +66,7 @@ export default function AppV2() {
   const reset = () => {
     setStage('upload'); setRaw([]); setHeaders([]); setMap({});
     setRows([]); setFileName(''); setErr(''); setProgress({ done: 0, total: 0 });
+    setFinished(false);
   };
 
   /* ---------------- step 2: match in Pipedrive ----------------
@@ -72,7 +74,8 @@ export default function AppV2() {
    * Broadband/CVE -> BT Order Ref in pipelines 3/4), but read-only:
    * V2 does no zero-seeding, so nothing is written during matching.  */
   const matchInPipedrive = async () => {
-    setErr(''); setBusy('Matching deals in Pipedrive (read-only — nothing is written yet)…');
+    setErr(''); setFinished(false);
+    setBusy('Matching deals in Pipedrive (read-only — nothing is written yet)…');
     const base = buildRows(dataRows, map);
     setProgress({ done: 0, total: base.length });
     const result = [];
@@ -313,6 +316,7 @@ export default function AppV2() {
       setProgress(p => ({ ...p, done: p.done + 1 }));
     }
     setBusy('');
+    setFinished(true);
   };
 
   const allTick = (key, val) =>
@@ -580,6 +584,9 @@ export default function AppV2() {
           </div>
         </div>
       )}
+
+      {/* ---- after step 4: updated / found / not found ---- */}
+      {stage === 'stages' && finished && <RunSummaryV2 rows={rows} />}
     </div>
   );
 }
@@ -620,4 +627,125 @@ function StatusTag({ r }) {
   };
   const [cls, label] = m[r.status] || ['t-part', r.status];
   return <><span className={'tag ' + cls}>{label}</span>{r.error && <div className="small neg">{r.error}</div>}</>;
+}
+
+/* ---------------- after step 4: what the run actually did ---------------- *
+ * Three lists: deals written to, deals found but left alone (and why), and
+ * rows with no deal in Pipedrive at all. */
+const wasUpdated = r => !!r.dealId && (!!r.wrote || r.status === 'done');
+
+function RunSummaryV2({ rows }) {
+  const stageLabel = id => STAGE_LIST.find(s => s.id === id)?.label || '—';
+  const updated = rows.filter(wasUpdated);
+  const found = rows.filter(r => r.dealId && !wasUpdated(r));
+  const missing = rows.filter(r => !r.dealId);
+
+  const whyNot = r =>
+    r.status === 'error' ? (r.error || 'Failed')
+      : r.dealStatus !== 'won' ? `Deal is ${r.dealStatus || 'not won'} — only won deals are updated`
+      : r.applied ? 'This line is already in the payment log — left as it was'
+      : r.status === 'ambiguous' ? (r.error || 'Several deals matched — not written')
+      : r.status === 'calculating' ? 'Variance had not recalculated — nothing written'
+      : r.status === 'nostage' ? 'No stage rule matched — nothing written'
+      : 'Left unticked — nothing written';
+
+  return (
+    <div className="card">
+      <h2>Run summary</h2>
+      <p className="sub">What this run changed in Pipedrive, and what it left alone.</p>
+      <div className="stats">
+        <div className="stat"><div className="v">{updated.length}</div><div className="k">Updated in Pipedrive</div></div>
+        <div className="stat"><div className={'v' + (found.length ? ' warn' : '')}>{found.length}</div><div className="k">Found, not updated</div></div>
+        <div className="stat"><div className={'v' + (missing.length ? ' neg' : '')}>{missing.length}</div><div className="k">Not found</div></div>
+      </div>
+
+      <h2>Updated in Pipedrive — {updated.length}</h2>
+      {updated.length === 0
+        ? <p className="sub">Nothing was written to Pipedrive on this run.</p>
+        : <div className="scroll">
+            <table>
+              <thead><tr>
+                <th>Deal</th><th>Match key</th><th>Line appended</th>
+                <th className="num">Rollup now</th><th>Payment Stage</th>
+                <th className="num">Variance %</th><th>Status</th>
+              </tr></thead>
+              <tbody>{updated.map(r => (
+                <tr key={r.id}>
+                  <td>
+                    <a href={`${PD_DOMAIN}/deal/${r.dealId}`} target="_blank" rel="noreferrer">{r.dealTitle}</a>
+                    <div className="small">#{r.dealId} · pipeline {r.pipelineId}</div>
+                  </td>
+                  <td className="mono">{r.matchKey}<div className="small">{r.matchField}</div></td>
+                  <td>
+                    {r.wrote && r.invoiceDate
+                      ? <code className="logline">+ {formatLogLine(r.invoiceDate, r.amount)}</code>
+                      : <span className="small">not written</span>}
+                  </td>
+                  <td className="num">{r.storedRollup == null ? '—' : gbp(r.storedRollup)}</td>
+                  <td>
+                    {r.status === 'done'
+                      ? <span className="small">{stageLabel(r.newStage)}</span>
+                      : <span className="small neg">not updated</span>}
+                  </td>
+                  <td className="num">{r.variancePct == null ? '—' : r.variancePct.toFixed(2)}</td>
+                  <td><StatusTag r={r} /></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>}
+
+      <h2 style={{ marginTop: 20 }}>Found in Pipedrive but not updated — {found.length}</h2>
+      {found.length === 0
+        ? <p className="sub">Every matched deal was written to.</p>
+        : <div className="scroll">
+            <table>
+              <thead><tr>
+                <th>Deal</th><th>Match key</th><th className="num">Amount</th>
+                <th className="num">Log total</th><th>Current stage</th><th>Why it was left alone</th>
+              </tr></thead>
+              <tbody>{found.map(r => (
+                <tr key={r.id}>
+                  <td>
+                    <a href={`${PD_DOMAIN}/deal/${r.dealId}`} target="_blank" rel="noreferrer">{r.dealTitle}</a>
+                    <div className="small">#{r.dealId} · pipeline {r.pipelineId}</div>
+                  </td>
+                  <td className="mono">{r.matchKey}<div className="small">{r.matchField}</div></td>
+                  <td className="num">{gbp(r.amount)}</td>
+                  <td className="num">{r.parsedTotal == null ? '—' : gbp(r.parsedTotal)}</td>
+                  <td className="small">{r.currentStage || '—'}</td>
+                  <td className="bd">{whyNot(r)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>}
+
+      <h2 style={{ marginTop: 20 }}>Not found in Pipedrive — {missing.length}</h2>
+      {missing.length === 0
+        ? <p className="sub">Every row in the file matched a deal.</p>
+        : <div className="scroll">
+            <table>
+              <thead><tr>
+                <th>Organisation</th><th>Product</th><th>Match key</th>
+                <th className="num">Amount</th><th>Invoice date</th><th>Reason</th>
+              </tr></thead>
+              <tbody>{missing.map(r => (
+                <tr key={r.id}>
+                  <td>{r.org || '—'}</td>
+                  <td><span className={'tag ' + (r.product === 'Cloud Voice' ? 't-cv' : 't-bb')}>{r.product}</span></td>
+                  <td className="mono">{r.matchKey}<div className="small">{r.matchField}</div></td>
+                  <td className="num">{gbp(r.amount)}</td>
+                  <td className="small">{r.invoiceDate || '—'}</td>
+                  <td className="bd neg">{r.error || 'No matching deal'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>}
+
+      <div className="footnote">
+        Totals — {gbp(updated.reduce((n, r) => n + (r.wrote ? r.amount : 0), 0))} of commission logged
+        across {updated.filter(r => r.wrote).length} deal(s); {updated.filter(r => r.status === 'done').length} Payment
+        Stage field(s) updated.
+      </div>
+    </div>
+  );
 }
